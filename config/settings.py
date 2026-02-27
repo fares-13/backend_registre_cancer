@@ -28,7 +28,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['https://backend-registre-cancer.onrender.com'] # À restreindre en production
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",") # À restreindre en production
 
 
 # Application definition
@@ -187,3 +187,8 @@ STORAGES = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True # À restreindre en production
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://my-frontend-domain.com",
+]
