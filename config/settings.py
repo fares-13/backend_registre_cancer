@@ -28,7 +28,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['*'] # À restreindre en production
+ALLOWED_HOSTS = ['https://backend-registre-cancer.onrender.com'] # À restreindre en production
 
 
 # Application definition
