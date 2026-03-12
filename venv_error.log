@@ -1,0 +1,22 @@
+﻿env\Scripts\python : 
+Watching for file 
+changes with 
+StatReloader
+Au caractère Ligne:1 : 1
++ env\Scripts\python 
+manage.py runserver 
+0.0.0.0:8003 2>&1 | 
+Out-File - ...
++ ~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~
+    + CategoryInfo      
+        : NotSpecified  
+  : (Watching for fi.   
+ ..th StatReloader:S    
+tring) [], RemoteEx    
+ception
+    + FullyQualifiedErr 
+   orId : NativeComman  
+  dError
+ 
