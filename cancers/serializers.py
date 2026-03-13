@@ -1,11 +1,25 @@
 from rest_framework import serializers
-from .models import CancerCase, Anapath, Imaging, Analysis, CancerType, CancerAttribute, CancerTreatment
+from django.db import transaction
+from .models import (
+    CancerCase, Anapath, Imaging, Analysis, CancerType,
+    CancerAttribute, CancerTreatment, ImagingType, AnalysisType
+)
 from patients.serializers import PatientSerializer
 from patients.models import Patient
 
 class CancerAttributeSerializer(serializers.ModelSerializer):
     class Meta:
         model = CancerAttribute
+        fields = ['id_attribute', 'cancer_type', 'nom_interne', 'label', 'field_type', 'requis', 'options', 'is_basic', 'is_active']
+
+class ImagingTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ImagingType
+        fields = '__all__'
+
+class AnalysisTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AnalysisType
         fields = '__all__'
 
 class CancerTypeSerializer(serializers.ModelSerializer):
@@ -18,22 +32,49 @@ class CancerTypeSerializer(serializers.ModelSerializer):
 class AnapathSerializer(serializers.ModelSerializer):
     class Meta:
         model = Anapath
-        fields = ['id_anapath', 'cancer_case', 'N_dossier_anapath', 'N_lecture', 'medecin', 'date_etude']
+        fields = ['id_anapath', 'cancer_case', 'N_dossier_anapath', 'N_lecture', 'medecin', 'date_etude', 'report']
+        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
 
 class ImagingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Imaging
         fields = ['id_imagerie', 'cancer_case', 'type_imagerie', 'date_imagerie', 'document']
+        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
 
 class AnalysisSerializer(serializers.ModelSerializer):
     class Meta:
         model = Analysis
         fields = ['id_analyse', 'cancer_case', 'type_analyse', 'date_analyse', 'document']
+        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
 
 class CancerTreatmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = CancerTreatment
         fields = ['id_traitement', 'cancer_case', 'type_traitement', 'date_traitement', 'remarques', 'created_at']
+
+
+class CancerCaseListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for the list endpoint.
+    Only returns scalar fields + patient name + cancer type name.
+    No nested imagings, analyses, or treatments → much smaller payload.
+    """
+    patient_nom = serializers.CharField(source='patient.nom', read_only=True)
+    patient_prenom = serializers.CharField(source='patient.prenom', read_only=True)
+    cancer_type_nom = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CancerCase
+        fields = [
+            'id_cancer',
+            'patient_nom', 'patient_prenom',
+            'cancer_type_nom', 'type_cancer',
+            'sous_type',
+            'etat', 'created_at',
+        ]
+
+    def get_cancer_type_nom(self, obj):
+        return obj.cancer_type.nom if obj.cancer_type else None
 
 class CancerCaseSerializer(serializers.ModelSerializer):
     anapath = AnapathSerializer(required=False, allow_null=True)
@@ -49,7 +90,7 @@ class CancerCaseSerializer(serializers.ModelSerializer):
     
     # Writable fields
     patient_id = serializers.PrimaryKeyRelatedField(
-        queryset=Patient.objects.all(), source='patient', write_only=True
+        queryset=Patient.objects.all(), source='patient', write_only=True, required=False
     )
     cancer_type_id = serializers.PrimaryKeyRelatedField(
         queryset=CancerType.objects.all(), source='cancer_type', write_only=True, required=False, allow_null=True
@@ -60,11 +101,12 @@ class CancerCaseSerializer(serializers.ModelSerializer):
         fields = [
             'id_cancer', 'patient', 'patient_id', 'cancer_type', 'cancer_type_id', 'cancer_type_detail',
             'taille_cancer', 'type_cancer', 'sous_type', 'niveau', 'etat', 
-            'classification_stade', 'dynamic_attributes',
+            'dynamic_attributes',
             'anapath', 'imagings', 'analyses', 'treatments', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id_cancer', 'created_at', 'updated_at']
 
+    @transaction.atomic
     def create(self, validated_data):
         anapath_data = validated_data.pop('anapath', None)
         imagings_data = validated_data.pop('imagings', [])
@@ -87,6 +129,7 @@ class CancerCaseSerializer(serializers.ModelSerializer):
             
         return cancer_case
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         # Handle basic fields
         anapath_data = validated_data.pop('anapath', None)
@@ -116,4 +159,6 @@ class CancerCaseSerializer(serializers.ModelSerializer):
             for analysis_data in analyses_data:
                 Analysis.objects.create(cancer_case=instance, **analysis_data)
                 
+        return instance
+
         return instance

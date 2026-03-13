@@ -11,26 +11,61 @@ from .serializers import (
 from django.db import transaction
 from .services import DuplicateDetectionService
 
+
 class PatientViewSet(viewsets.ModelViewSet):
     """
     ViewSet for full CRUD on Patients.
+    Supports server-side search, filtering, and pagination.
     Protected by JWT Authentication.
     """
-    queryset = Patient.objects.all().order_by('-created_at')
+    # FIX: Removed prefetch_related('onboarding_token').
+    # onboarding_token is a OneToOne reverse accessor — NOT a M2M or reverse FK.
+    # prefetch_related does NOT work correctly on OneToOne and crashes when
+    # some patients have no token. The SerializerMethodField already handles
+    # None via try/except, so no prefetch is needed for it.
+    queryset = Patient.objects.all().prefetch_related(
+        'habitudes_reponses',
+        'antecedents_familiaux',
+    ).order_by('-created_at')
     serializer_class = PatientSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        search = self.request.query_params.get('search', '').strip()
+        sexe = self.request.query_params.get('sexe', '').strip()
+        deces = self.request.query_params.get('deces', '').strip()
+
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(nom__icontains=search) |
+                Q(prenom__icontains=search) |
+                Q(numero_dossier__icontains=search) |
+                Q(N_securite_sociale__icontains=search) |
+                Q(N_carte_nationale__icontains=search)
+            )
+        if sexe:
+            qs = qs.filter(sexe=sexe)
+        if deces:
+            qs = qs.filter(deces=deces.lower() == 'true')
+
+        return qs
+
     def create(self, request, *args, **kwargs):
-        # 1. Check for duplicates before creating
-        # We use a flag 'ignore_duplicates' to force creation if the user already reviewed
+        """
+        Create a patient, with duplicate detection before saving.
+        If potential duplicates are found, returns HTTP 409.
+        Pass 'ignore_duplicates: true' in the body to force-create.
+        """
         ignore_duplicates = request.data.get('ignore_duplicates', False)
-        
+
         if not ignore_duplicates:
             detection_service = DuplicateDetectionService()
             potential_duplicates = detection_service.detect_duplicates(request.data)
-            
+
             critical_duplicates = [d for d in potential_duplicates if d['score'] >= 85]
-            
+
             if potential_duplicates:
                 return Response({
                     "message": "Des doublons potentiels ont été détectés.",
@@ -42,19 +77,96 @@ class PatientViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         patient = serializer.save()
-        # Automatically generate onboarding token
+        # Automatically generate onboarding token on patient creation
         PatientOnboardingToken.objects.create(patient=patient)
 
+    # ── /api/patients/check-duplicate/ (POST) ────────────────────────────────
+    # Called by the frontend before submitting the patient creation form.
+    # Receives patient form data and returns potential duplicates.
+    @action(detail=False, methods=['post'], url_path='check-duplicate')
+    def check_duplicate(self, request):
+        """
+        Endpoint to check for duplicates without creating a patient.
+        POST body: patient field values (nom, prenom, date_naissance, etc.)
+        Returns: list of potential duplicate patients with similarity scores.
+        """
+        detection_service = DuplicateDetectionService()
+        potential_duplicates = detection_service.detect_duplicates(request.data)
+
+        critical = [d for d in potential_duplicates if d['score'] >= 85]
+
+        return Response({
+            "duplicates": potential_duplicates,
+            "has_duplicates": len(potential_duplicates) > 0,
+            "has_critical": len(critical) > 0,
+        }, status=status.HTTP_200_OK)
+
+    # ── /api/patients/duplicates/ (GET) ─────────────────────────────────────
+    # Scans the database for pairs of patients that look like duplicates.
+    # EXPENSIVE on large datasets — call only from the admin/maintenance UI.
     @action(detail=False, methods=['get'])
     def duplicates(self, request):
         """
-        Returns a list of potential duplicate pairs detected in the database.
-        Note: This is an expensive operation if run on the fly. 
-        In production, this should be pre-calculated.
+        Scans DB for duplicate patient pairs.
+        Returns a summary list with scores.
+
+        Query params:
+            min_score (int): minimum similarity score threshold (default: 75)
+            limit (int): max number of candidate pairs to return (default: 50)
         """
-        # For now, return an empty list or implement basic detection if needed.
-        # For the demo/task, we'll return an empty list to avoid crashes.
-        return Response([], status=status.HTTP_200_OK)
+        min_score = int(request.query_params.get('min_score', 75))
+        limit = int(request.query_params.get('limit', 50))
+
+        # Fetch a bounded set of patients to compare (safety limit for 230k scale)
+        # This is the "scan" mode — for production, this should run as a background task.
+        patients_sample = Patient.objects.all().order_by('-created_at')[:500]
+
+        found_pairs = []
+        seen = set()
+        detection_service = DuplicateDetectionService()
+
+        for patient in patients_sample:
+            if len(found_pairs) >= limit:
+                break
+
+            patient_data = {
+                'nom': patient.nom,
+                'prenom': patient.prenom,
+                'date_naissance': patient.date_naissance.isoformat() if patient.date_naissance else None,
+                'sexe': patient.sexe,
+                'N_carte_nationale': patient.N_carte_nationale,
+                'telephone': patient.telephone,
+            }
+
+            duplicates_for_patient = detection_service.detect_duplicates(patient_data)
+
+            for dup in duplicates_for_patient:
+                if str(dup['id_malade']) == str(patient.id_malade):
+                    continue  # Skip self-match
+
+                pair_key = tuple(sorted([str(patient.id_malade), str(dup['id_malade'])]))
+                if pair_key in seen:
+                    continue
+
+                if dup['score'] >= min_score:
+                    seen.add(pair_key)
+                    found_pairs.append({
+                        'patient_1': {
+                            'id': str(patient.id_malade),
+                            'nom': patient.nom,
+                            'prenom': patient.prenom,
+                            'date_naissance': patient_data['date_naissance'],
+                        },
+                        'patient_2': dup,
+                        'score': dup['score'],
+                    })
+
+        found_pairs.sort(key=lambda x: x['score'], reverse=True)
+
+        return Response({
+            'count': len(found_pairs),
+            'pairs': found_pairs,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'])
     def merge(self, request):
@@ -64,26 +176,27 @@ class PatientViewSet(viewsets.ModelViewSet):
         data = request.data
         existing_patient_id = data.get('existing_patient_id')
         merged_data = data.get('merged_data')
-        
+
         if not existing_patient_id or not merged_data:
             return Response({"error": "Données de fusion incomplètes."}, status=status.HTTP_400_BAD_REQUEST)
-            
+
         with transaction.atomic():
             existing_patient = get_object_or_404(Patient, id_malade=existing_patient_id)
-            
-            # Update existing patient with chosen values
+
             for field, value in merged_data.items():
                 if hasattr(existing_patient, field):
                     setattr(existing_patient, field, value)
-            
+
             existing_patient.save()
-            
+
             return Response({
                 "message": "Fusion effectuée avec succès.",
                 "patient": PatientSerializer(existing_patient).data
             }, status=status.HTTP_200_OK)
 
+
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
 
 class QuestionHabitudeViewSet(viewsets.ModelViewSet):
     """ Admin configurable questions for Habitudes de vie """
@@ -91,6 +204,7 @@ class QuestionHabitudeViewSet(viewsets.ModelViewSet):
     serializer_class = QuestionHabitudeSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+
 
 class PublicOnboardingViewSet(viewsets.ViewSet):
     """ Public endpoint for filling out onboarding data via QR token """
@@ -100,11 +214,11 @@ class PublicOnboardingViewSet(viewsets.ViewSet):
         token_obj = get_object_or_404(PatientOnboardingToken, token=pk)
         if not token_obj.is_valid:
             return Response({"error": "Ce lien a expiré ou a déjà été utilisé."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         patient = token_obj.patient
         questions = QuestionHabitude.objects.filter(actif=True).order_by('ordre')
         questions_data = QuestionHabitudeSerializer(questions, many=True).data
-        
+
         return Response({
             "patient": {
                 "id": patient.id_malade,
@@ -122,13 +236,11 @@ class PublicOnboardingViewSet(viewsets.ViewSet):
 
         patient = token_obj.patient
         data = request.data
-        
-        # Remove dynamic habitudes loops for now to inspect the Patient model for a JSON field
+
         if 'habitudes_fixes' in data:
             patient.habitudes_fixes = data['habitudes_fixes']
             patient.save()
 
-        # Save antecedents
         antecedents = data.get('antecedents', [])
         for ant in antecedents:
             age_parent = ant.get('age_parent')
@@ -141,9 +253,8 @@ class PublicOnboardingViewSet(viewsets.ViewSet):
                 parent_decede=ant.get('parent_decede', False),
                 cancer_parent=ant.get('cancer_parent', False)
             )
-            
-        # Mark token as used
+
         token_obj.is_used = True
         token_obj.save()
-        
+
         return Response({"message": "Données enregistrées avec succès."})

@@ -57,6 +57,14 @@ class Patient(models.Model):
     class Meta:
         verbose_name = "Patient"
         verbose_name_plural = "Patients"
+        indexes = [
+            models.Index(fields=['nom'], name='patient_nom_idx'),
+            models.Index(fields=['prenom'], name='patient_prenom_idx'),
+            models.Index(fields=['date_naissance'], name='patient_dob_idx'),
+            models.Index(fields=['sexe'], name='patient_sexe_idx'),
+            models.Index(fields=['deces'], name='patient_deces_idx'),
+            models.Index(fields=['nom', 'prenom'], name='patient_full_name_idx'),
+        ]
 
 class QuestionHabitude(models.Model):
     class TypeReponse(models.TextChoices):

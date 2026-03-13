@@ -4,12 +4,14 @@ from .views import (
     CancerCaseViewSet, AnapathViewSet, 
     ImagingViewSet, AnalysisViewSet,
     CancerTypeViewSet, CancerAttributeViewSet,
-    CancerTreatmentViewSet
+    CancerTreatmentViewSet, ImagingTypeViewSet, AnalysisTypeViewSet
 )
 
 router = DefaultRouter()
 router.register(r'types', CancerTypeViewSet, basename='cancer-type')
 router.register(r'attributes', CancerAttributeViewSet, basename='cancer-attribute')
+router.register(r'imaging-types', ImagingTypeViewSet, basename='imaging-type')
+router.register(r'analysis-types', AnalysisTypeViewSet, basename='analysis-type')
 router.register(r'cases', CancerCaseViewSet, basename='cancer-case')
 router.register(r'anapath', AnapathViewSet, basename='anapath')
 router.register(r'imaging', ImagingViewSet, basename='imaging')

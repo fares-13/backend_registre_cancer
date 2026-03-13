@@ -48,32 +48,46 @@ class DuplicateDetectionService:
     @staticmethod
     def detect_duplicates(target_data):
         """
-        Detects potential duplicate patients for given input data.
-        Returns a list of dicts with patient data and similarity score.
+        Detects potential duplicate patients.
+        
+        Strategy (scalable to 230k+ patients):
+        1. Use PostgreSQL to narrow candidates to a small subset using indexed fields
+           (birth year + first letter of name). This reduces candidates from 230k down to ~50-500.
+        2. Apply fuzzy scoring only on the narrow candidate set in Python.
+        
+        This avoids a full table scan while still using fuzzy matching quality.
         """
         nom = target_data.get('nom', '')
         prenom = target_data.get('prenom', '')
         date_naissance = target_data.get('date_naissance')
+        
         if isinstance(date_naissance, str):
             try:
                 date_naissance = datetime.strptime(date_naissance, '%Y-%m-%d').date()
             except ValueError:
                 date_naissance = None
+
+        # ── Phase 1: Database-level candidate narrowing (uses indexes) ─────
+        # This is O(log N) instead of O(N) thanks to the indexes we added.
+        candidates = Patient.objects.all()
         
-        # 1. Blocking Strategy: Patients with same birth year
-        if not date_naissance:
-            # If no date, broaden search but this is rare in cancer registries
-            candidates = Patient.objects.all()
-            print(f"[DuplicateDetection] No birth date provided, searching all {candidates.count()} patients.")
-        else:
-            # On récupère les candidats (même année de naissance)
-            candidates = Patient.objects.filter(date_naissance__year=date_naissance.year)
-            print(f"[DuplicateDetection] Found {candidates.count()} candidates for year {date_naissance.year}")
+        if date_naissance:
+            # Filter by birth year — a highly selective and indexed query
+            candidates = candidates.filter(date_naissance__year=date_naissance.year)
         
+        # Further narrow by first letter of last name if available (uses patient_nom_idx)
+        if nom and len(nom) > 0:
+            candidates = candidates.filter(nom__istartswith=nom[0])
+
+        # Limit the candidate set to a safe maximum for in-memory processing
+        candidates = candidates.select_related()[:500]
+
+        # ── Phase 2: Fuzzy scoring on narrowed candidate set ───────────────
         potential_matches = []
+        n_id_target = target_data.get('N_carte_nationale')
+        phone_target = target_data.get('telephone')
 
         for candidate in candidates:
-            print(f"[DuplicateDetection] Comparing with {candidate.nom} {candidate.prenom}")
             score = 0
             weights = {
                 'date_naissance': 30,
@@ -84,48 +98,38 @@ class DuplicateDetectionService:
                 'N_carte_nationale': 40,
             }
             
-            # Simple exact or fuzzy scoring
-            # Birth Date (exact same date after blocking by year)
             if candidate.date_naissance == date_naissance:
                 score += weights['date_naissance']
             
-            # Names (Fuzzy)
             score += (similarity_score(candidate.nom, nom) * weights['nom']) / 100
             score += (similarity_score(candidate.prenom, prenom) * weights['prenom']) / 100
             
-            # National ID (High weight if present)
-            n_id_target = target_data.get('N_carte_nationale')
             if n_id_target and candidate.N_carte_nationale:
                 if normalize_string(n_id_target) == normalize_string(candidate.N_carte_nationale):
                     score += weights['N_carte_nationale']
             
-            # Phone
-            phone_target = target_data.get('telephone')
             if phone_target and candidate.telephone:
                 if normalize_string(phone_target) == normalize_string(candidate.telephone):
                     score += weights['telephone']
             
-            # Sexe
             if candidate.sexe == target_data.get('sexe'):
                 score += weights['sexe']
 
             final_score = round(score)
-            print(f"[DuplicateDetection] Final score for {candidate.nom}: {final_score}")
             
             if final_score >= 60:
-                print(f"[DuplicateDetection] Found match: {candidate.nom} score {final_score}")
                 potential_matches.append({
                     'id_malade': str(candidate.id_malade),
                     'numero_dossier': candidate.numero_dossier,
                     'nom': candidate.nom,
                     'prenom': candidate.prenom,
-                    'date_naissance': candidate.date_naissance.isoformat(),
+                    'date_naissance': candidate.date_naissance.isoformat() if candidate.date_naissance else None,
                     'sexe': candidate.sexe,
                     'telephone': candidate.telephone,
                     'N_carte_nationale': candidate.N_carte_nationale,
                     'score': final_score
                 })
 
-        # Sort by score descending
         potential_matches.sort(key=lambda x: x['score'], reverse=True)
         return potential_matches
+

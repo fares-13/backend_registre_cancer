@@ -17,6 +17,32 @@ class CancerType(models.Model):
         verbose_name = "Type de Cancer"
         verbose_name_plural = "Types de Cancer"
 
+class ImagingType(models.Model):
+    id_imaging_type = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nom = models.CharField(max_length=200, verbose_name="Nom du type d'imagerie")
+    cancer_type = models.ForeignKey(CancerType, on_delete=models.CASCADE, related_name='imaging_types', verbose_name="Type de Cancer", null=True, blank=True, help_text="Si vide, ce type d'imagerie est disponible pour tous les cancers.")
+    
+    def __str__(self):
+        return f"{self.nom} ({self.cancer_type.nom if self.cancer_type else 'Général'})"
+
+    class Meta:
+        verbose_name = "Type d'Imagerie"
+        verbose_name_plural = "Types d'Imagerie"
+        unique_together = ('nom', 'cancer_type')
+
+class AnalysisType(models.Model):
+    id_analysis_type = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nom = models.CharField(max_length=200, verbose_name="Nom du type d'analyse")
+    cancer_type = models.ForeignKey(CancerType, on_delete=models.CASCADE, related_name='analysis_types', verbose_name="Type de Cancer", null=True, blank=True, help_text="Si vide, ce type d'analyse est disponible pour tous les cancers.")
+    
+    def __str__(self):
+        return f"{self.nom} ({self.cancer_type.nom if self.cancer_type else 'Général'})"
+
+    class Meta:
+        verbose_name = "Type d'Analyse"
+        verbose_name_plural = "Types d'Analyse"
+        unique_together = ('nom', 'cancer_type')
+
 class CancerAttribute(models.Model):
     class FieldType(models.TextChoices):
         TEXT = 'text', 'Texte'
@@ -33,6 +59,7 @@ class CancerAttribute(models.Model):
     requis = models.BooleanField(default=False)
     options = models.JSONField(blank=True, null=True, help_text="Liste des options pour 'select', ex: [\"Option 1\", \"Option 2\"]")
     is_basic = models.BooleanField(default=False, help_text="Si coché, cet attribut apparaît pour TOUS les cancers.")
+    is_active = models.BooleanField(default=True, verbose_name="Actif")
 
     def __str__(self):
         return f"{self.label} ({self.cancer_type.nom if self.cancer_type else 'Basique'})"
@@ -40,6 +67,7 @@ class CancerAttribute(models.Model):
     class Meta:
         verbose_name = "Attribut de Cancer"
         verbose_name_plural = "Attributs de Cancer"
+        ordering = ['label']
 
 class CancerCase(models.Model):
     id_cancer = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -49,15 +77,14 @@ class CancerCase(models.Model):
     
     # Old static fields (can be kept for legacy or migrated gradually)
     taille_cancer = models.CharField(max_length=100, blank=True, null=True, verbose_name="Taille du cancer")
-    type_cancer = models.CharField(max_length=200, verbose_name="Type de cancer (Ancien)")
+    type_cancer = models.CharField(max_length=200, blank=True, null=True, verbose_name="Type de cancer (Ancien)")
     sous_type = models.CharField(max_length=200, blank=True, null=True, verbose_name="Sous-type")
     niveau = models.CharField(max_length=100, blank=True, null=True, verbose_name="Niveau")
-    etat = models.CharField(max_length=100, blank=True, null=True, verbose_name="État")
-    classification_stade = models.CharField(max_length=100, blank=True, null=True, verbose_name="Classification stade")
     
-    # New dynamic attributes storage
-    dynamic_attributes = models.JSONField(default=dict, blank=True, verbose_name="Attributs dynamiques")
+    # Flexible field for custom cancer types and extra data
+    dynamic_attributes = models.JSONField(default=dict, blank=True, null=True, verbose_name="Attributs Dynamiques")
     
+    etat = models.CharField(max_length=50, default='en_attente', verbose_name="État du dossier")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -67,6 +94,11 @@ class CancerCase(models.Model):
     class Meta:
         verbose_name = "Cas de Cancer"
         verbose_name_plural = "Cas de Cancers"
+        indexes = [
+            models.Index(fields=['etat'], name='cancer_etat_idx'),
+            models.Index(fields=['type_cancer'], name='cancer_type_idx'),
+            models.Index(fields=['created_at'], name='cancer_created_at_idx'),
+        ]
 
 class Anapath(models.Model):
     id_anapath = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -76,6 +108,7 @@ class Anapath(models.Model):
     N_lecture = models.CharField(max_length=100, blank=True, null=True, verbose_name="N° Lecture")
     medecin = models.CharField(max_length=200, blank=True, null=True, verbose_name="Médecin")
     date_etude = models.DateField(blank=True, null=True, verbose_name="Date d'étude")
+    report = models.TextField(blank=True, null=True, verbose_name="Compte-rendu")
 
     def __str__(self):
         return f"Anapath {self.N_dossier_anapath}"
