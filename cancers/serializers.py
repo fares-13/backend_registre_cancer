@@ -70,7 +70,7 @@ class CancerCaseListSerializer(serializers.ModelSerializer):
             'patient_nom', 'patient_prenom',
             'cancer_type_nom', 'type_cancer',
             'sous_type',
-            'etat', 'created_at',
+            'etat', 'date_diagnostic', 'created_at',
         ]
 
     def get_cancer_type_nom(self, obj):
@@ -100,7 +100,7 @@ class CancerCaseSerializer(serializers.ModelSerializer):
         model = CancerCase
         fields = [
             'id_cancer', 'patient', 'patient_id', 'cancer_type', 'cancer_type_id', 'cancer_type_detail',
-            'taille_cancer', 'type_cancer', 'sous_type', 'niveau', 'etat', 
+            'taille_cancer', 'type_cancer', 'sous_type', 'niveau', 'etat', 'date_diagnostic',
             'dynamic_attributes',
             'anapath', 'imagings', 'analyses', 'treatments', 'created_at', 'updated_at'
         ]

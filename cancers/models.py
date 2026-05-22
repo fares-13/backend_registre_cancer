@@ -84,6 +84,7 @@ class CancerCase(models.Model):
     # Flexible field for custom cancer types and extra data
     dynamic_attributes = models.JSONField(default=dict, blank=True, null=True, verbose_name="Attributs Dynamiques")
     
+    date_diagnostic = models.DateField(null=True, blank=True, verbose_name="Date du diagnostic")
     etat = models.CharField(max_length=50, default='en_attente', verbose_name="État du dossier")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

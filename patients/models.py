@@ -44,8 +44,12 @@ class Patient(models.Model):
     date_deces = models.DateField(blank=True, null=True)
     cause = models.TextField(blank=True, null=True)
     derniere_visite = models.DateField(auto_now=True)
-    
-    # NEW: Static Habits Storage
+
+    # Geographic coordinates for GIS analytics
+    latitude  = models.FloatField(blank=True, null=True, verbose_name="Latitude")
+    longitude = models.FloatField(blank=True, null=True, verbose_name="Longitude")
+
+    # Static Habits Storage
     habitudes_fixes = models.JSONField(blank=True, null=True, default=dict)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -64,6 +68,8 @@ class Patient(models.Model):
             models.Index(fields=['sexe'], name='patient_sexe_idx'),
             models.Index(fields=['deces'], name='patient_deces_idx'),
             models.Index(fields=['nom', 'prenom'], name='patient_full_name_idx'),
+            # GIS: quickly skip patients with no coordinates
+            models.Index(fields=['latitude', 'longitude'], name='patient_coords_idx'),
         ]
 
 class QuestionHabitude(models.Model):

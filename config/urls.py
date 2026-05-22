@@ -24,6 +24,10 @@ urlpatterns = [
     path('api/accounts/', include('accounts.urls')),
     path('api/patients/', include('patients.urls')),
     path('api/cancers/', include('cancers.urls')),
+    path('api/gis/', include('gis_analytics.urls')),
+    path('api/reports/', include('reporting.urls')),
+    path('api/rcp/', include('rcp.urls')),
+    path('', lambda request: JsonResponse({"status": "API is running."})),
 ]
 
 if settings.DEBUG:
