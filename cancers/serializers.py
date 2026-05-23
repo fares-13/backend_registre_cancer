@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.db import transaction
 from .models import (
     CancerCase, Anapath, Imaging, Analysis, CancerType,
-    CancerAttribute, CancerTreatment, ImagingType, AnalysisType
+    CancerAttribute, CancerTreatment, ImagingType, AnalysisType,
+    MolecularMarker, FollowUp
 )
 from patients.serializers import PatientSerializer
 from patients.models import Patient
@@ -63,24 +64,46 @@ class CancerTreatmentSerializer(serializers.ModelSerializer):
         fields = ['id_traitement', 'cancer_case', 'type_traitement', 'date_traitement', 'remarques', 'created_at']
 
 
+class MolecularMarkerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MolecularMarker
+        fields = '__all__'
+        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
+
+class FollowUpSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FollowUp
+        fields = '__all__'
+        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
+
 class CancerCaseListSerializer(serializers.ModelSerializer):
-    """
-    Lightweight serializer for the list endpoint.
-    Only returns scalar fields + patient name + cancer type name.
-    No nested imagings, analyses, or treatments → much smaller payload.
-    """
+
     patient_nom = serializers.CharField(source='patient.nom', read_only=True)
     patient_prenom = serializers.CharField(source='patient.prenom', read_only=True)
     cancer_type_nom = serializers.SerializerMethodField()
+
+    # Add lightweight nested docs
+    imagings = ImagingSerializer(many=True, read_only=True)
+    analyses = AnalysisSerializer(many=True, read_only=True)
+    anapath = AnapathSerializer(read_only=True)
 
     class Meta:
         model = CancerCase
         fields = [
             'id_cancer',
-            'patient_nom', 'patient_prenom',
-            'cancer_type_nom', 'type_cancer',
+            'patient_nom',
+            'patient_prenom',
+            'cancer_type_nom',
+            'type_cancer',
             'sous_type',
-            'etat', 'date_diagnostic', 'created_at',
+            'etat',
+            'date_diagnostic',
+            'created_at',
+
+            # Needed for Patient Documents page
+            'imagings',
+            'analyses',
+            'anapath',
         ]
 
     def get_cancer_type_nom(self, obj):

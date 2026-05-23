@@ -152,6 +152,8 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
 
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 

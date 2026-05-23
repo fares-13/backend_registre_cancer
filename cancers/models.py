@@ -165,3 +165,46 @@ class CancerTreatment(models.Model):
         verbose_name = "Traitement"
         verbose_name_plural = "Traitements"
         ordering = ['-date_traitement']
+
+class MolecularMarker(models.Model):
+    id_molecular = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cancer_case = models.ForeignKey(CancerCase, on_delete=models.CASCADE, related_name='molecular_markers', verbose_name="Cas de Cancer")
+
+    marker_name = models.CharField(max_length=200, verbose_name="Nom du marqueur")
+    result = models.TextField(blank=True, null=True, verbose_name="Résultat")
+    method = models.CharField(max_length=200, blank=True, null=True, verbose_name="Méthode")
+    test_date = models.DateField(blank=True, null=True, verbose_name="Date du test")
+    laboratory = models.CharField(max_length=200, blank=True, null=True, verbose_name="Laboratoire")
+    notes = models.TextField(blank=True, null=True, verbose_name="Notes")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.marker_name} - {self.cancer_case.patient.nom}"
+
+    class Meta:
+        verbose_name = "Marqueur Moléculaire"
+        verbose_name_plural = "Marqueurs Moléculaires"
+        ordering = ['-test_date']
+
+class FollowUp(models.Model):
+    id_followup = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    cancer_case = models.ForeignKey(CancerCase, on_delete=models.CASCADE, related_name='followups', verbose_name="Cas de Cancer")
+
+    visit_date = models.DateField(verbose_name="Date de visite")
+    visit_type = models.CharField(max_length=200, verbose_name="Type de visite")
+    findings = models.TextField(blank=True, null=True, verbose_name="Constatations")
+    next_visit_date = models.DateField(blank=True, null=True, verbose_name="Prochaine visite")
+    notes = models.TextField(blank=True, null=True, verbose_name="Notes")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Suivi {self.visit_type} - {self.cancer_case.patient.nom} ({self.visit_date})"
+
+    class Meta:
+        verbose_name = "Suivi"
+        verbose_name_plural = "Suivis"
+        ordering = ['-visit_date']

@@ -9,6 +9,8 @@ from .models import (
     Imaging,
     Analysis,
     CancerTreatment,
+    MolecularMarker,
+    FollowUp,
 )
 
 
@@ -218,4 +220,50 @@ class CancerTreatmentAdmin(admin.ModelAdmin):
 
     search_fields = (
         "type_traitement",
+    )
+
+
+# =========================
+# MOLECULAR MARKER ADMIN
+# =========================
+
+@admin.register(MolecularMarker)
+class MolecularMarkerAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "marker_name",
+        "cancer_case",
+        "result",
+        "test_date",
+    )
+
+    search_fields = (
+        "marker_name",
+    )
+
+    list_filter = (
+        "marker_name",
+    )
+
+
+# =========================
+# FOLLOW-UP ADMIN
+# =========================
+
+@admin.register(FollowUp)
+class FollowUpAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "visit_type",
+        "cancer_case",
+        "visit_date",
+        "next_visit_date",
+    )
+
+    search_fields = (
+        "visit_type",
+    )
+
+    list_filter = (
+        "visit_type",
     )

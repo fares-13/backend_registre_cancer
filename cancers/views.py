@@ -4,14 +4,16 @@ from rest_framework.response import Response
 
 from .models import (
     CancerCase, Anapath, Imaging, Analysis, CancerType,
-    CancerAttribute, CancerTreatment, ImagingType, AnalysisType
+    CancerAttribute, CancerTreatment, ImagingType, AnalysisType,
+    MolecularMarker, FollowUp
 )
 
 from .serializers import (
     CancerCaseSerializer, CancerCaseListSerializer, AnapathSerializer,
     ImagingSerializer, AnalysisSerializer,
     CancerTypeSerializer, CancerAttributeSerializer,
-    CancerTreatmentSerializer, ImagingTypeSerializer, AnalysisTypeSerializer
+    CancerTreatmentSerializer, ImagingTypeSerializer, AnalysisTypeSerializer,
+    MolecularMarkerSerializer, FollowUpSerializer
 )
 
 from accounts.permissions import IsAdmin, IsArchitect, IsMedecin
@@ -227,3 +229,13 @@ class CancerTreatmentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
+
+class MolecularMarkerViewSet(viewsets.ModelViewSet):
+    queryset = MolecularMarker.objects.all()
+    serializer_class = MolecularMarkerSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class FollowUpViewSet(viewsets.ModelViewSet):
+    queryset = FollowUp.objects.all()
+    serializer_class = FollowUpSerializer
+    permission_classes = [permissions.IsAuthenticated]
