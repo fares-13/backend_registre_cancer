@@ -38,15 +38,25 @@ class AnapathSerializer(serializers.ModelSerializer):
 class ImagingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Imaging
-        fields = ['id_imagerie', 'cancer_case', 'type_imagerie', 'date_imagerie', 'document']
-        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
+        fields = [
+            'id_imagerie',
+            'cancer_case',
+            'type_imagerie',
+            'date_imagerie',
+            'document'
+        ]
+
 
 class AnalysisSerializer(serializers.ModelSerializer):
     class Meta:
         model = Analysis
-        fields = ['id_analyse', 'cancer_case', 'type_analyse', 'date_analyse', 'document']
-        extra_kwargs = {'cancer_case': {'read_only': True, 'required': False}}
-
+        fields = [
+            'id_analyse',
+            'cancer_case',
+            'type_analyse',
+            'date_analyse',
+            'document'
+        ]
 class CancerTreatmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = CancerTreatment
