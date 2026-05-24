@@ -38,6 +38,12 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return f"{self.email} ({self.role})"
 
+    def get_full_name(self):
+        return f"{self.prenom} {self.nom}".strip()
+
+    def get_short_name(self):
+        return self.prenom
+
 
 class MedecinProfile(models.Model):
     utilisateur = models.OneToOneField(Utilisateur, on_delete=models.CASCADE, related_name="profile_medecin")

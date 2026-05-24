@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     RcpSessionViewSet, RcpParticipantViewSet, RcpCaseViewSet,
-    RcpDecisionViewSet, RcpProtocolViewSet, RcpTemplateViewSet, RcpMessageViewSet
+    RcpDecisionViewSet, RcpProtocolViewSet, RcpTemplateViewSet,
+    RcpMessageViewSet, RcpNotificationViewSet, DoctorListViewSet
 )
 
 router = DefaultRouter()
@@ -13,7 +14,9 @@ router.register(r'decisions', RcpDecisionViewSet, basename='rcp-decisions')
 router.register(r'protocols', RcpProtocolViewSet, basename='rcp-protocols')
 router.register(r'templates', RcpTemplateViewSet, basename='rcp-templates')
 router.register(r'messages', RcpMessageViewSet, basename='rcp-messages')
+router.register(r'notifications', RcpNotificationViewSet, basename='rcp-notifications')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('doctors/', DoctorListViewSet.as_view({'get': 'list'}), name='rcp-doctors'),
 ]

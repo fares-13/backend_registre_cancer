@@ -1,15 +1,69 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from .models import Patient, PatientOnboardingToken, QuestionHabitude, ReponseHabitude, AntecedentFamilial
 from .serializers import (
-    PatientSerializer, QuestionHabitudeSerializer, 
+    PatientSerializer, QuestionHabitudeSerializer,
     ReponseHabitudeSerializer, AntecedentFamilialSerializer
 )
 
 from django.db import transaction
 from .services import DuplicateDetectionService
+
+from audit.helpers import log_action
+from audit.models import AuditLog
+
+from services.ai.patient_extraction import (
+    extract_patient_from_transcript,
+    PatientExtractionError,
+    AIProviderNotAvailableError,
+    InvalidJSONError,
+    EmptyResponseError,
+)
+
+
+class ExtractPatientAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        transcript = str(request.data.get("transcript", "")).strip()
+        if not transcript:
+            return Response(
+                {"detail": "Le champ transcript est obligatoire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            extracted = extract_patient_from_transcript(transcript)
+        except AIProviderNotAvailableError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except InvalidJSONError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except EmptyResponseError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        except PatientExtractionError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": f"Erreur extraction: {str(exc)}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(extracted, status=status.HTTP_200_OK)
 
 
 class PatientViewSet(viewsets.ModelViewSet):
@@ -18,11 +72,6 @@ class PatientViewSet(viewsets.ModelViewSet):
     Supports server-side search, filtering, and pagination.
     Protected by JWT Authentication.
     """
-    # FIX: Removed prefetch_related('onboarding_token').
-    # onboarding_token is a OneToOne reverse accessor — NOT a M2M or reverse FK.
-    # prefetch_related does NOT work correctly on OneToOne and crashes when
-    # some patients have no token. The SerializerMethodField already handles
-    # None via try/except, so no prefetch is needed for it.
     queryset = Patient.objects.all().prefetch_related(
         'habitudes_reponses',
         'antecedents_familiaux',
@@ -55,8 +104,6 @@ class PatientViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """
         Create a patient, with duplicate detection before saving.
-        If potential duplicates are found, returns HTTP 409.
-        Pass 'ignore_duplicates: true' in the body to force-create.
         """
         ignore_duplicates = request.data.get('ignore_duplicates', False)
 
@@ -77,50 +124,59 @@ class PatientViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         patient = serializer.save()
-        # Automatically generate onboarding token on patient creation
         PatientOnboardingToken.objects.create(patient=patient)
+        log_action(
+            user=self.request.user,
+            action_type=AuditLog.ActionType.CREATE_PATIENT,
+            entity_type=AuditLog.EntityType.PATIENT,
+            entity_id=str(patient.id_malade),
+            entity_label=f"{patient.nom} {patient.prenom}",
+            description=f"Création du patient {patient.nom} {patient.prenom}",
+            request=self.request,
+        )
 
-    # ── /api/patients/check-duplicate/ (POST) ────────────────────────────────
-    # Called by the frontend before submitting the patient creation form.
-    # Receives patient form data and returns potential duplicates.
+    def perform_update(self, serializer):
+        patient = serializer.save()
+        log_action(
+            user=self.request.user,
+            action_type=AuditLog.ActionType.UPDATE_PATIENT,
+            entity_type=AuditLog.EntityType.PATIENT,
+            entity_id=str(patient.id_malade),
+            entity_label=f"{patient.nom} {patient.prenom}",
+            description=f"Modification du patient {patient.nom} {patient.prenom}",
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        log_action(
+            user=self.request.user,
+            action_type=AuditLog.ActionType.DELETE_PATIENT,
+            entity_type=AuditLog.EntityType.PATIENT,
+            entity_id=str(instance.id_malade),
+            entity_label=f"{instance.nom} {instance.prenom}",
+            description=f"Suppression du patient {instance.nom} {instance.prenom}",
+            request=self.request,
+        )
+        instance.delete()
+
     @action(detail=False, methods=['post'], url_path='check-duplicate')
     def check_duplicate(self, request):
-        """
-        Endpoint to check for duplicates without creating a patient.
-        POST body: patient field values (nom, prenom, date_naissance, etc.)
-        Returns: list of potential duplicate patients with similarity scores.
-        """
+        """Check for duplicates without creating a patient."""
         detection_service = DuplicateDetectionService()
         potential_duplicates = detection_service.detect_duplicates(request.data)
-
         critical = [d for d in potential_duplicates if d['score'] >= 85]
-
         return Response({
             "duplicates": potential_duplicates,
             "has_duplicates": len(potential_duplicates) > 0,
             "has_critical": len(critical) > 0,
         }, status=status.HTTP_200_OK)
 
-    # ── /api/patients/duplicates/ (GET) ─────────────────────────────────────
-    # Scans the database for pairs of patients that look like duplicates.
-    # EXPENSIVE on large datasets — call only from the admin/maintenance UI.
     @action(detail=False, methods=['get'])
     def duplicates(self, request):
-        """
-        Scans DB for duplicate patient pairs.
-        Returns a summary list with scores.
-
-        Query params:
-            min_score (int): minimum similarity score threshold (default: 75)
-            limit (int): max number of candidate pairs to return (default: 50)
-        """
+        """Scans DB for duplicate patient pairs."""
         min_score = int(request.query_params.get('min_score', 75))
         limit = int(request.query_params.get('limit', 50))
-
-        # Fetch a bounded set of patients to compare (safety limit for 230k scale)
-        # This is the "scan" mode — for production, this should run as a background task.
         patients_sample = Patient.objects.all().order_by('-created_at')[:500]
-
         found_pairs = []
         seen = set()
         detection_service = DuplicateDetectionService()
@@ -128,7 +184,6 @@ class PatientViewSet(viewsets.ModelViewSet):
         for patient in patients_sample:
             if len(found_pairs) >= limit:
                 break
-
             patient_data = {
                 'nom': patient.nom,
                 'prenom': patient.prenom,
@@ -137,17 +192,14 @@ class PatientViewSet(viewsets.ModelViewSet):
                 'N_carte_nationale': patient.N_carte_nationale,
                 'telephone': patient.telephone,
             }
-
             duplicates_for_patient = detection_service.detect_duplicates(patient_data)
 
             for dup in duplicates_for_patient:
                 if str(dup['id_malade']) == str(patient.id_malade):
-                    continue  # Skip self-match
-
+                    continue
                 pair_key = tuple(sorted([str(patient.id_malade), str(dup['id_malade'])]))
                 if pair_key in seen:
                     continue
-
                 if dup['score'] >= min_score:
                     seen.add(pair_key)
                     found_pairs.append({
@@ -162,7 +214,6 @@ class PatientViewSet(viewsets.ModelViewSet):
                     })
 
         found_pairs.sort(key=lambda x: x['score'], reverse=True)
-
         return Response({
             'count': len(found_pairs),
             'pairs': found_pairs,
@@ -170,9 +221,7 @@ class PatientViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def merge(self, request):
-        """
-        Merges two patient records or a new data entry with an existing record.
-        """
+        """Merges two patient records."""
         data = request.data
         existing_patient_id = data.get('existing_patient_id')
         merged_data = data.get('merged_data')
@@ -182,12 +231,21 @@ class PatientViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             existing_patient = get_object_or_404(Patient, id_malade=existing_patient_id)
-
             for field, value in merged_data.items():
                 if hasattr(existing_patient, field):
                     setattr(existing_patient, field, value)
-
             existing_patient.save()
+
+            log_action(
+                user=self.request.user,
+                action_type=AuditLog.ActionType.DUPLICATE_PATIENT,
+                entity_type=AuditLog.EntityType.PATIENT,
+                entity_id=str(existing_patient.id_malade),
+                entity_label=f"{existing_patient.nom} {existing_patient.prenom}",
+                description=f"Fusion de doublons vers le patient {existing_patient.nom} {existing_patient.prenom}",
+                request=self.request,
+                metadata={"merged_fields": list(merged_data.keys())},
+            )
 
             return Response({
                 "message": "Fusion effectuée avec succès.",

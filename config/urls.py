@@ -19,10 +19,13 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
+from patients.views import ExtractPatientAPIView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/extract-patient/', ExtractPatientAPIView.as_view(), name='extract-patient'),
     path('api/accounts/', include('accounts.urls')),
+    path('api/audit/', include('audit.urls')),
     path('api/patients/', include('patients.urls')),
     path('api/cancers/', include('cancers.urls')),
     path('api/gis/', include('gis_analytics.urls')),

@@ -20,10 +20,27 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables
-load_dotenv(BASE_DIR / '.env')
+loaded = load_dotenv(BASE_DIR / '.env')
+if not loaded:
+    import sys
+    print("WARNING: .env file not found or empty at", BASE_DIR / '.env', file=sys.stderr)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key')
+
+# AI Provider Configuration
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Startup validation
+if MISTRAL_API_KEY:
+    print("INFO: Mistral AI configured — model:", MISTRAL_MODEL)
+elif OPENAI_API_KEY:
+    print("INFO: OpenAI configured — model:", OPENAI_MODEL)
+else:
+    print("WARNING: No AI provider configured (MISTRAL_API_KEY or OPENAI_API_KEY required for extraction)")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
@@ -49,6 +66,7 @@ INSTALLED_APPS = [
     
     # Applications locales
     'accounts.apps.AccountsConfig',
+    'audit.apps.AuditConfig',
     'patients',
     'cancers',
     'gis_analytics',

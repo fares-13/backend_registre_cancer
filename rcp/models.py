@@ -22,7 +22,9 @@ class RcpSession(models.Model):
     isOnline = models.BooleanField(default=False)
     meetingLink = models.URLField(blank=True, null=True)
     coordinator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='coordinated_rcps')
-    service = models.CharField(max_length=100)
+    service = models.CharField(max_length=100, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    isAllDoctors = models.BooleanField(default=False, help_text="If True, all doctors can access this RCP")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -151,3 +153,29 @@ class RcpMessage(models.Model):
     readBy = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class RcpNotification(models.Model):
+    NOTIFICATION_TYPES = [
+        ('new_message', 'Nouveau message'),
+        ('participant_added', 'Participant ajouté'),
+        ('case_added', 'Cas ajouté'),
+        ('status_changed', 'Changement de statut'),
+        ('report_generated', 'Compte-rendu généré'),
+        ('report_signed', 'Compte-rendu signé'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rcp = models.ForeignKey(RcpSession, on_delete=models.CASCADE, related_name='notifications')
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='rcp_notifications')
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES)
+    title = models.CharField(max_length=200)
+    message = models.TextField(blank=True, null=True)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.notification_type}] {self.title}"

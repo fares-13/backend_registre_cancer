@@ -367,6 +367,59 @@ class StatisticsViewSet(viewsets.ViewSet):
         })
 
     @action(detail=False, methods=['get'])
+    def map_data(self, request):
+        self._parse_filters(request)
+        cases = self._filter_by_stage(self._base_cases())
+        patient_ids = self._filtered_patient_ids(cases)
+
+        patients_with_coords = Patient.objects.filter(
+            id_malade__in=patient_ids
+        ).exclude(
+            latitude__isnull=True
+        ).exclude(
+            longitude__isnull=True
+        )
+
+        patients_map = {
+            p.id_malade: p
+            for p in patients_with_coords.only(
+                'id_malade', 'nom', 'prenom', 'sexe',
+                'latitude', 'longitude', 'date_naissance',
+                'numero_dossier'
+            )
+        }
+
+        results = []
+        for case in cases.filter(
+            patient_id__in=patients_map.keys()
+        ).select_related('cancer_type', 'patient'):
+            p = patients_map[case.patient_id]
+            age = None
+            if p.date_naissance and case.date_diagnostic:
+                age = case.date_diagnostic.year - p.date_naissance.year
+                if (case.date_diagnostic.month, case.date_diagnostic.day) < (p.date_naissance.month, p.date_naissance.day):
+                    age -= 1
+
+            results.append({
+                'lat': p.latitude,
+                'lng': p.longitude,
+                'cancer_type_name': case.cancer_type.nom if case.cancer_type else 'Non spécifié',
+                'cancer_type_id': str(case.cancer_type.id_type) if case.cancer_type else None,
+                'patient_id': str(case.patient_id),
+                'patient_name': f"{p.nom} {p.prenom}",
+                'sexe': p.sexe,
+                'age': age,
+                'diagnosis_date': str(case.date_diagnostic) if case.date_diagnostic else None,
+                'patient_numero_dossier': p.numero_dossier,
+            })
+
+        return Response({
+            'points': results,
+            'total_cases_with_coords': len(results),
+            'total_patients_with_coords': len(patients_map),
+        })
+
+    @action(detail=False, methods=['get'])
     def documents(self, request):
         self._parse_filters(request)
         cases = self._filter_by_stage(self._base_cases())

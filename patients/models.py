@@ -55,6 +55,16 @@ class Patient(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def age_current(self):
+        if not self.date_naissance:
+            return None
+        from datetime import date
+        today = date.today()
+        return today.year - self.date_naissance.year - (
+            (today.month, today.day) < (self.date_naissance.month, self.date_naissance.day)
+        )
+
     def __str__(self):
         return f"{self.nom} {self.prenom} ({self.numero_dossier})"
 
