@@ -35,15 +35,20 @@ def log_action(
         route_path = request.path
         user_agent = request.META.get("HTTP_USER_AGENT", "")[:500]
 
-    AuditLog.objects.create(
-        user=user if user and user.is_authenticated else None,
-        action_type=action_type,
-        entity_type=entity_type,
-        entity_id=str(entity_id) if entity_id else "",
-        entity_label=str(entity_label)[:500] if entity_label else "",
-        description=str(description) if description else "",
-        route_path=route_path,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        metadata=metadata or {},
-    )
+    try:
+        AuditLog.objects.create(
+            user=user if user and user.is_authenticated else None,
+            action_type=action_type,
+            entity_type=entity_type,
+            entity_id=str(entity_id) if entity_id else "",
+            entity_label=str(entity_label)[:500] if entity_label else "",
+            description=str(description) if description else "",
+            route_path=route_path,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata=metadata or {},
+        )
+    except Exception as exc:
+        # Audit logging should not block the main request flow.
+        import sys
+        print(f"WARNING: failed to write audit log: {exc}", file=sys.stderr)
