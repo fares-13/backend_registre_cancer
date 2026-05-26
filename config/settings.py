@@ -173,6 +173,9 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", ",".join(DEFAULT_CORS_ALLOWED_ORIGINS)).split(",")
     if origin.strip()
 ]
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
 CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
 
 X_FRAME_OPTIONS = 'SAMEORIGIN'
