@@ -8,145 +8,147 @@ from rest_framework.response import Response
 
 from .services import PDFReportGenerator
 from gis_analytics.views import GisAnalyzeView
+from cancers.statistics_views import StatisticsViewSet
+
+
+def _make_internal_request(request, factory_method, view_class, data, suffix=''):
+    """Helper to invoke an internal DRF view and return its response data."""
+    from django.test import RequestFactory
+    factory = RequestFactory()
+    django_request = factory_method(data)
+    if 'HTTP_AUTHORIZATION' in request.META:
+        django_request.META['HTTP_AUTHORIZATION'] = request.META['HTTP_AUTHORIZATION']
+    elif hasattr(request, '_request') and 'HTTP_AUTHORIZATION' in request._request.META:
+        django_request.META['HTTP_AUTHORIZATION'] = request._request.META['HTTP_AUTHORIZATION']
+    django_request.user = request.user
+    view = view_class.as_view()
+    response = view(django_request)
+    if response.status_code != 200:
+        return None
+    return response.data
+
 
 class ReportGenerateView(APIView):
     """
     POST /api/reports/generate/
-    
-    Generates a PDF report based on filters and optional chart snapshots.
+
+    Generates a comprehensive PDF report with KPIs, charts, tables,
+    geographic analysis, and data quality metrics.
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    def _normalize_filters(self, raw_filters):
+        """Convert frontend nested filter format to flat StatisticsViewSet params."""
+        params = {}
+        cancer_filters = raw_filters.get('cancer_filters', {})
+        date_range = cancer_filters.get('date_range', [])
+        if date_range and len(date_range) == 2:
+            if date_range[0]:
+                params['date_from'] = date_range[0]
+            if date_range[1]:
+                params['date_to'] = date_range[1]
+        cancer_types = cancer_filters.get('cancer_types', [])
+        if cancer_types and len(cancer_types) == 1:
+            params['cancer_type'] = cancer_types[0]
+        return params
+
     def post(self, request):
-        filters = request.data.get('filters', {})
+        raw_filters = request.data.get('filters', {})
         options = request.data.get('options', {})
-        images  = request.data.get('images', {})
+        images = request.data.get('images', {})
+        filters = self._normalize_filters(raw_filters)
 
-        # 1. Reuse GIS analysis to get the data
-        # We use as_view() and pass a proper DRF request simulation
-        from django.test import RequestFactory
-        factory = RequestFactory()
-        
-        # Create a basic django request
-        django_request = factory.post('/api/gis/analyze/', data=json.dumps(filters), content_type='application/json')
-        
-        # Copy the authorization header so the internal view passes JWT authentication
-        if 'HTTP_AUTHORIZATION' in request.META:
-            django_request.META['HTTP_AUTHORIZATION'] = request.META['HTTP_AUTHORIZATION']
-        elif 'HTTP_AUTHORIZATION' in request._request.META:
-            django_request.META['HTTP_AUTHORIZATION'] = request._request.META['HTTP_AUTHORIZATION']
-            
-        django_request.user = request.user
-        
-        # Call the view
-        gis_view = GisAnalyzeView.as_view()
-        gis_response = gis_view(django_request)
-        
-        if gis_response.status_code != 200:
-            return Response(gis_response.data, status=gis_response.status_code)
-        
-        analysis_data = gis_response.data
-        zones_data = analysis_data.get('zones', [])
+        # 1. Gather all statistics data from StatisticsViewSet
+        stats_data = _make_internal_request(
+            request,
+            lambda d: RequestFactory().get('/api/cancers/statistics/report_summary/', data=d),
+            StatisticsViewSet.as_view({'get': 'report_summary'}),
+            filters
+        )
 
-        # 2. Setup PDF Generation
+        selected_charts = options.get('charts', [])
+
+        # 2. Gather GIS analysis data (zone-based) — only if user wants chart/map
+        gis_data = None
+        if 'map' in selected_charts or 'bar' in selected_charts:
+            gis_data = _make_internal_request(
+                request,
+                lambda d: RequestFactory().post('/api/gis/analyze/', data=json.dumps(d), content_type='application/json'),
+                GisAnalyzeView,
+                raw_filters
+            )
+
+        # 3. Setup PDF Generator
         buffer = io.BytesIO()
         title = options.get('title', "Rapport d'Analyse Épidémiologique")
         generator = PDFReportGenerator(buffer, title=title)
 
-        # 3. Build Content
         generator.add_cover_page()
 
-        # Section: Dashboard Summary
-        generator.add_section("Résumé Global")
-        total_cases = analysis_data.get('total_filtered_cases', 0)
-        generator.add_paragraph(f"Analyse basée sur un total de {total_cases} cas filtrés enregistrés dans le système.")
-        
-        # Summary Table
-        metrics_selected = options.get('metrics', ['incidence', 'mortality'])
-        if zones_data:
-            summary_table_data = [] # Data rows
-            header = ["Zone / Couche", "Cas (N)", "Taux Mortalité", "Pollution"]
-            for z in zones_data:
-                summary_table_data.append([
-                    z['zone_name'],
-                    str(z['incidence']),
-                    f"{z['mortality_rate']}%",
-                    f"{z['pollution_level']} µg/m³" if z['pollution_level'] else "—"
-                ])
-            generator.add_table(summary_table_data, header=header)
+        # ── Section 1: Executive Summary KPIs ──
+        if 'kpi' in selected_charts and stats_data and stats_data.get('kpi'):
+            generator.add_kpi_section(stats_data['kpi'])
 
-        # Section: Geographic Distribution
-        if 'map' in options.get('charts', []) and images.get('map'):
-            generator.add_section("Analyse Cartographique")
-            generator.add_paragraph("Répartition géographique de l'incidence par zone géographique définie.")
+        # ── Section 2: Temporal Trends ──
+        if 'temporal' in selected_charts and stats_data and stats_data.get('temporal'):
+            generator.add_temporal_section(stats_data['temporal'])
+
+        # ── Section 3: Cancer Distribution (includes stage) ──
+        if 'distribution' in selected_charts:
+            if stats_data and stats_data.get('cancer_distribution'):
+                generator.add_cancer_distribution_section(stats_data['cancer_distribution'])
+            if stats_data and stats_data.get('kpi', {}).get('stage_distribution'):
+                generator.add_stage_distribution_section(stats_data['kpi']['stage_distribution'])
+
+        # ── Section 4: Treatment Analysis ──
+        if 'treatment' in selected_charts and stats_data and stats_data.get('treatment'):
+            generator.add_treatment_section(stats_data['treatment'])
+
+        # ── Section 5: Follow-Up Analysis ──
+        if 'followup' in selected_charts and stats_data and stats_data.get('followup'):
+            generator.add_followup_section(stats_data['followup'])
+
+        # ── Section 6: Geographic Analysis ──
+        if gis_data:
+            zones_data = gis_data.get('zones', [])
+            if zones_data:
+                generator.add_section("Analyse Géographique par Zone")
+                total_cases = gis_data.get('total_filtered_cases', 0)
+                generator.add_paragraph(f"Analyse basée sur {total_cases} cas filtrés, répartis par zone géographique.")
+                summary_table = []
+                for z in zones_data:
+                    summary_table.append([
+                        z['zone_name'],
+                        str(z['incidence']),
+                        f"{z['mortality_rate']}%",
+                        f"{z['pollution_level']} µg/m³" if z.get('pollution_level') else "—"
+                    ])
+                generator.add_table(summary_table, header=["Zone / Couche", "Cas (N)", "Taux Mortalité", "Pollution"])
+
+        # Section: Geographic Coverage (from statistics)
+        if stats_data and stats_data.get('geographic'):
+            generator.add_geographic_section(stats_data['geographic'])
+
+        # Section: Map Screenshot (if provided by frontend)
+        if 'map' in selected_charts and images.get('map'):
+            generator.add_section("Carte de Répartition")
+            generator.add_paragraph("Répartition géographique des cas sur la carte.")
             generator.add_image_from_base64(images['map'])
 
-        # Section: Statistical Charts
-        if any(c in options.get('charts', []) for c in ['bar', 'pie', 'line_trend', 'pie_gender', 'bar_age']):
-            generator.add_section("Analyses Statistiques")
-            
-            # Bar Chart: Incidence per Zone
-            if 'bar' in options.get('charts', []):
-                if images.get('bar'):
-                    generator.add_paragraph("Incidence par zone (Capture écran)")
-                    generator.add_image_from_base64(images['bar'])
-                else:
-                    generator.add_paragraph("Incidence par zone (Génération système)")
-                    bar_data = [(z['zone_name'], z['incidence']) for z in zones_data]
-                    generator.add_bar_chart(bar_data)
-            
-            # Pie Chart: Cancer Type Distribution
-            if 'pie' in options.get('charts', []):
-                generator.add_paragraph("Répartition par type de cancer (Génération système)")
-                global_type_dist = {}
-                for z in zones_data:
-                    for t, count in z.get('cancer_type_distribution', {}).items():
-                        global_type_dist[t] = global_type_dist.get(t, 0) + count
-                
-                pie_data = list(global_type_dist.items())
-                if pie_data:
-                    generator.add_pie_chart(pie_data, title="Types de Cancer")
+        # ── Section 7: Mortality Analysis ──
+        if 'mortality' in selected_charts and stats_data and stats_data.get('mortality', {}).get('results'):
+            generator.add_mortality_section(stats_data['mortality'])
 
-            # Line Chart: Temporal Trend
-            if 'line_trend' in options.get('charts', []):
-                generator.add_paragraph("Tendance Temporelle de l'Incidence (Génération système)")
-                global_trend_dist = {}
-                for z in zones_data:
-                    for month, count in z.get('temporal_trend', {}).items():
-                        global_trend_dist[month] = global_trend_dist.get(month, 0) + count
-                
-                trend_data = list(global_trend_dist.items())
-                if trend_data:
-                    generator.add_line_chart(trend_data, x_label="Mois/Année", y_label="Nouveaux Cas", title="Évolution Temporelle")
+        # ── Section 8: Data Quality ──
+        if 'data_quality' in selected_charts and stats_data and stats_data.get('documents'):
+            generator.add_data_quality_section(stats_data['documents'])
 
-            # Pie Chart: Gender Distribution
-            if 'pie_gender' in options.get('charts', []):
-                generator.add_paragraph("Répartition par Sexe (Génération système)")
-                males = sum(z.get('gender_distribution', {}).get('M', 0) for z in zones_data)
-                females = sum(z.get('gender_distribution', {}).get('F', 0) for z in zones_data)
-                gender_data = [('Hommes', males), ('Femmes', females)]
-                if males > 0 or females > 0:
-                    generator.add_pie_chart(gender_data, title="Répartition par Sexe")
-
-            # Bar Chart: Age Distribution
-            if 'bar_age' in options.get('charts', []):
-                generator.add_paragraph("Distribution par Tranche d'Âge (Génération système)")
-                global_age_dist = {}
-                for z in zones_data:
-                    for bracket, count in z.get('age_distribution', {}).items():
-                        global_age_dist[bracket] = global_age_dist.get(bracket, 0) + count
-                
-                age_data = list(global_age_dist.items())
-                if age_data:
-                    # Specific order for age brackets
-                    age_order = ['0-18', '19-35', '36-50', '51-65', '65+']
-                    age_data.sort(key=lambda x: age_order.index(x[0]) if x[0] in age_order else 99)
-                    generator.add_bar_chart(age_data, x_label="Tranche d'Âge", y_label="Nombre de Cas", title="Pyramide des Âges Simplifiée", color="#f59e0b")        # Final Build
+        # Final Build
         generator.build()
         buffer.seek(0)
-        
+
         filename = f"rapport_cancer_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
         response = HttpResponse(buffer, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        
+
         return response

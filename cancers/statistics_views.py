@@ -1,3 +1,6 @@
+import io
+import base64
+from collections import OrderedDict
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,7 +11,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from .models import CancerCase, Patient, FollowUp, CancerTreatment, Imaging, Analysis, Anapath, MolecularMarker
-from accounts.permissions import IsAdmin, IsEpidemiologiste
+from accounts.permissions import IsAdmin, IsEpidemiologiste, IsMedecin
 
 
 class StatisticsViewSet(viewsets.ViewSet):
@@ -132,7 +135,7 @@ class StatisticsViewSet(viewsets.ViewSet):
         total_female = sex_distribution.get('Féminin', 0)
 
         avg_age, age_groups = self._age_distribution(cases, patient_ids)
-        pediatric_count = sum(v for k, v in age_groups.items() if int(k.split('-')[0]) < 18)
+        pediatric_count = sum(v for k, v in age_groups.items() if int(k.split('-')[0].rstrip('+')) < 18)
         adult_count = total_patients - pediatric_count
 
         # Stage distribution
@@ -305,7 +308,7 @@ class StatisticsViewSet(viewsets.ViewSet):
             'results': results,
         })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsEpidemiologiste | IsMedecin])
     def missing_documents_detail(self, request):
         self._parse_filters(request)
         cases = self._filter_by_stage(self._base_cases())
@@ -456,4 +459,141 @@ class StatisticsViewSet(viewsets.ViewSet):
             'cases_without_analysis': total_cases - cases_with_analysis,
             'cases_without_anapath': total_cases - cases_with_anapath,
             'cases_without_molecular': total_cases - cases_with_molecular,
+        })
+
+    @action(detail=False, methods=['get'])
+    def report_summary(self, request):
+        """Aggregated endpoint returning ALL statistics for PDF report generation."""
+        self._parse_filters(request)
+        cases = self._filter_by_stage(self._base_cases())
+        patient_ids = self._filtered_patient_ids(cases)
+
+        now = timezone.now()
+        today = now.date()
+
+        total_patients = len(patient_ids)
+        total_cases = cases.count()
+        cases_this_month = cases.filter(date_diagnostic__year=now.year, date_diagnostic__month=now.month).count()
+        active_cases = cases.filter(~Q(etat__in=['termine', 'clos', 'archive'])).count()
+
+        deceased = Patient.objects.filter(id_malade__in=patient_ids, deces=True).count()
+        mortality_rate = round((deceased / max(total_patients, 1)) * 100, 1)
+        survival_rate = round(((total_patients - deceased) / max(total_patients, 1)) * 100, 1)
+        recurrence = Patient.objects.filter(id_malade__in=patient_ids, nb_fois_cancer__gt=1).count()
+        recurrence_rate = round((recurrence / max(total_patients, 1)) * 100, 1)
+
+        active_followups = FollowUp.objects.filter(cancer_case__in=cases, next_visit_date__gte=today).values('cancer_case').distinct().count()
+        six_months_ago = today - timedelta(days=180)
+        last_visits = FollowUp.objects.filter(cancer_case__in=cases).values('cancer_case').annotate(last_visit=Max('visit_date'))
+        lost_followup = last_visits.filter(last_visit__lt=six_months_ago).count()
+
+        sex_dist = Patient.objects.filter(id_malade__in=patient_ids).values('sexe').annotate(count=Count('id_malade'))
+        sex_map = {'M': 'Masculin', 'F': 'Féminin'}
+        sex_distribution = {sex_map.get(s['sexe'], s['sexe'] or 'Non précisé'): s['count'] for s in sex_dist}
+        total_male = sex_distribution.get('Masculin', 0)
+        total_female = sex_distribution.get('Féminin', 0)
+
+        avg_age, age_groups = self._age_distribution(cases, patient_ids)
+        pediatric_count = sum(v for k, v in age_groups.items() if int(k.split('-')[0].rstrip('+')) < 18)
+        adult_count = total_patients - pediatric_count
+
+        stage_dist = {}
+        for c in cases.only('id_cancer', 'dynamic_attributes'):
+            attrs = c.dynamic_attributes or {}
+            stage = attrs.get('classification_stade') or attrs.get('stade') or attrs.get('stage') or 'Non classé'
+            stage_dist[str(stage)] = stage_dist.get(str(stage), 0) + 1
+        stage_distribution = [{'name': k, 'count': v} for k, v in sorted(stage_dist.items(), key=lambda x: -x[1])]
+
+        monthly = cases.annotate(month=TruncMonth('date_diagnostic')).values('month').annotate(count=Count('id_cancer')).order_by('month')
+        yearly = cases.annotate(year=TruncYear('date_diagnostic')).values('year').annotate(count=Count('id_cancer')).order_by('year')
+        deceased_ids = Patient.objects.filter(deces=True).values_list('id_malade', flat=True)
+        mortality_monthly = cases.filter(patient_id__in=deceased_ids).annotate(month=TruncMonth('date_diagnostic')).values('month').annotate(count=Count('id_cancer')).order_by('month')
+
+        by_type = cases.values('cancer_type__nom').annotate(count=Count('id_cancer')).order_by('-count')
+        by_type_sex = cases.values('cancer_type__nom', 'patient__sexe').annotate(count=Count('id_cancer')).order_by('cancer_type__nom')
+
+        treatments = CancerTreatment.objects.filter(cancer_case__in=cases)
+        treatment_by_type = treatments.values('type_traitement').annotate(count=Count('id_traitement')).order_by('-count')
+
+        followups = FollowUp.objects.filter(cancer_case__in=cases)
+        by_visit_type = followups.values('visit_type').annotate(count=Count('id_followup')).order_by('-count')
+
+        case_ids = cases.values_list('id_cancer', flat=True)
+        cases_with_imaging = Imaging.objects.filter(cancer_case_id__in=case_ids).values('cancer_case').distinct().count()
+        cases_with_analysis = Analysis.objects.filter(cancer_case_id__in=case_ids).values('cancer_case').distinct().count()
+        cases_with_anapath = Anapath.objects.filter(cancer_case_id__in=case_ids).values('cancer_case').distinct().count()
+        cases_with_molecular = MolecularMarker.objects.filter(cancer_case_id__in=case_ids).values('cancer_case').distinct().count()
+
+        patients = Patient.objects.filter(id_malade__in=patient_ids)
+        with_coords = patients.exclude(latitude__isnull=True).exclude(longitude__isnull=True).count()
+        without_coords = patients.filter(latitude__isnull=True).count()
+
+        recent_deaths = patients.filter(deces=True).exclude(date_deces__isnull=True).order_by('-date_deces')[:15]
+        mortality_results = []
+        for p in recent_deaths:
+            ctypes = CancerCase.objects.filter(patient=p).values_list('cancer_type__nom', flat=True).distinct()
+            mortality_results.append({
+                'patient_id': str(p.id_malade), 'nom': p.nom, 'prenom': p.prenom,
+                'sexe': p.sexe, 'date_naissance': str(p.date_naissance) if p.date_naissance else None,
+                'date_deces': str(p.date_deces) if p.date_deces else None,
+                'cause': p.cause or 'Non spécifiée',
+                'cancer_types': [ct for ct in ctypes if ct],
+            })
+
+        return Response({
+            'kpi': {
+                'total_patients': total_patients, 'total_cases': total_cases,
+                'cases_this_month': cases_this_month, 'active_cases': active_cases,
+                'deceased': deceased, 'mortality_rate': mortality_rate,
+                'survival_rate': survival_rate, 'recurrence': recurrence,
+                'recurrence_rate': recurrence_rate,
+                'active_followups': active_followups, 'lost_followup': lost_followup,
+                'sex_distribution': sex_distribution,
+                'total_male': total_male, 'total_female': total_female,
+                'avg_age': avg_age, 'pediatric_count': pediatric_count, 'adult_count': adult_count,
+                'age_groups': [{'name': k, 'count': v} for k, v in age_groups.items()],
+                'stage_distribution': stage_distribution,
+            },
+            'temporal': {
+                'monthly': [{'month': str(m['month']), 'count': m['count']} for m in monthly if m['month']],
+                'yearly': [{'year': y['year'].year if hasattr(y['year'], 'year') else y['year'], 'count': y['count']} for y in yearly if y['year']],
+                'mortality_monthly': [{'month': str(m['month']), 'count': m['count']} for m in mortality_monthly if m['month']],
+            },
+            'cancer_distribution': {
+                'by_type': [{'name': t['cancer_type__nom'] or 'Non spécifié', 'count': t['count']} for t in by_type],
+                'by_type_sex': [{'cancer_type': t['cancer_type__nom'] or 'Non spécifié', 'sexe': sex_map.get(t['patient__sexe'], 'Non précisé'), 'count': t['count']} for t in by_type_sex],
+                'by_age_group': [{'name': k, 'count': v} for k, v in age_groups.items()],
+            },
+            'treatment': {
+                'by_type': [{'name': t['type_traitement'], 'count': t['count']} for t in treatment_by_type],
+                'total_treatments': treatments.count(),
+                'cases_with_treatment': treatments.values('cancer_case').distinct().count(),
+                'cases_without_treatment': cases.exclude(id_cancer__in=treatments.values('cancer_case')).count(),
+            },
+            'followup': {
+                'by_visit_type': [{'name': v['visit_type'], 'count': v['count']} for v in by_visit_type],
+                'total_followups': followups.count(),
+                'active_followups': active_followups,
+                'overdue_followups': FollowUp.objects.filter(cancer_case__in=cases, next_visit_date__lt=today, next_visit_date__isnull=False).values('cancer_case').distinct().count(),
+                'lost_to_followup': lost_followup,
+                'cases_with_followup': followups.values('cancer_case').distinct().count(),
+                'cases_without_followup': cases.exclude(id_cancer__in=followups.values('cancer_case')).count(),
+            },
+            'documents': {
+                'total_cases': total_cases,
+                'cases_with_imaging': cases_with_imaging,
+                'cases_with_analysis': cases_with_analysis,
+                'cases_with_anapath': cases_with_anapath,
+                'cases_with_molecular': cases_with_molecular,
+            },
+            'mortality': {
+                'count': len(mortality_results),
+                'results': mortality_results,
+            },
+            'geographic': {
+                'with_coordinates': with_coords,
+                'without_coordinates': without_coords,
+                'total_patients_geo': patients.count(),
+                'coverage_rate': round((with_coords / max(patients.count(), 1)) * 100, 1),
+            },
         })

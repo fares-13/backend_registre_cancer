@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Zone, ZoneDataSource
+from .models import Zone, ZoneDataSource, Commune
 
 
 class ZoneDataSourceInline(admin.TabularInline):
@@ -21,3 +21,10 @@ class ZoneAdmin(admin.ModelAdmin):
 class ZoneDataSourceAdmin(admin.ModelAdmin):
     list_display = ['zone', 'year', 'pollution_level', 'population']
     list_filter  = ['year']
+
+
+@admin.register(Commune)
+class CommuneAdmin(admin.ModelAdmin):
+    list_display = ['name', 'wilaya']
+    list_filter  = ['wilaya']
+    search_fields = ['name']

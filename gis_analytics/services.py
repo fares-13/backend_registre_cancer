@@ -86,3 +86,31 @@ def point_in_zone(latitude: float, longitude: float, geojson) -> bool:
     except (ShapelyError, ValueError, TypeError) as e:
         logger.debug(f"point_in_zone geometry error: {e}")
         return False
+
+
+def geometry_intersects_geojson(geom_a: dict, geom_b: dict) -> bool:
+    """
+    Return True if two GeoJSON geometry dicts spatially intersect.
+
+    Args:
+        geom_a: First GeoJSON geometry dict (e.g., user-drawn zone)
+        geom_b: Second GeoJSON geometry dict (e.g., commune boundary)
+
+    Returns:
+        bool: True if the two geometries intersect or one contains the other.
+    """
+    if not SHAPELY_AVAILABLE:
+        return False
+
+    a = _normalize_geojson(geom_a)
+    b = _normalize_geojson(geom_b)
+    if a is None or b is None:
+        return False
+
+    try:
+        poly_a = shape(a)
+        poly_b = shape(b)
+        return poly_a.intersects(poly_b) or poly_a.contains(poly_b) or poly_b.contains(poly_a)
+    except (ShapelyError, ValueError, TypeError) as e:
+        logger.debug(f"geometry_intersects_geojson error: {e}")
+        return False

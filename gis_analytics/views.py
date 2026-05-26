@@ -3,11 +3,12 @@ from datetime import datetime
 
 from django.db.models import Q
 from rest_framework import viewsets, views, status, permissions
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Zone, ZoneDataSource, AreaLayer
-from .serializers import ZoneSerializer, ZoneListSerializer, ZoneDataSourceSerializer, AreaLayerSerializer
-from .services import point_in_zone, SHAPELY_AVAILABLE
+from .models import Zone, ZoneDataSource, AreaLayer, Commune
+from .serializers import ZoneSerializer, ZoneListSerializer, ZoneCreateSerializer, ZoneDataSourceSerializer, AreaLayerSerializer, CommuneSerializer
+from .services import point_in_zone, geometry_intersects_geojson, SHAPELY_AVAILABLE
 
 from cancers.models import CancerCase
 
@@ -22,12 +23,12 @@ class ZoneViewSet(viewsets.ModelViewSet):
     """
     Full CRUD for geographic zones.
     GET /api/gis/zones/         - List all zones (lightweight)
-    GET /api/gis/zones/{id}/    - Zone detail with geojson + data sources
-    POST /api/gis/zones/        - Create zone (auto-assigns created_by)
+    GET /api/gis/zones/{id}/    - Zone detail with geojson + geometries + data sources
+    POST /api/gis/zones/        - Create zone (auto-assigns created_by, accepts geojson or geometries[])
     PATCH /api/gis/zones/{id}/  - Update zone
     DELETE /api/gis/zones/{id}/ - Delete zone
     """
-    queryset = Zone.objects.all().prefetch_related('data_sources').order_by('-created_at')
+    queryset = Zone.objects.all().prefetch_related('data_sources', 'geometries').order_by('-created_at')
     serializer_class = ZoneSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -36,8 +37,91 @@ class ZoneViewSet(viewsets.ModelViewSet):
             return ZoneListSerializer
         return ZoneSerializer
 
+    def create(self, request, *args, **kwargs):
+        serializer = ZoneCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(created_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        """Ensure list endpoint returns valid JSON even when queryset is empty."""
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=['get'])
+    def intersecting_communes(self, request, pk=None):
+        """
+        GET /api/gis/zones/{id}/intersecting_communes/
+
+        Returns communes whose geometry intersects ANY of this zone's geometries.
+        """
+        zone = self.get_object()
+        communes = Commune.objects.all()
+        if not SHAPELY_AVAILABLE:
+            return Response([], status=status.HTTP_200_OK)
+
+        geometries = list(zone.geometries.all())
+        if not geometries and zone.geojson:
+            geometries = [type('obj', (object,), {'geometry': zone.geojson})()]
+
+        results = []
+        for c in communes:
+            for g in geometries:
+                geom = g.geometry if hasattr(g, 'geometry') else g.geojson
+                if geometry_intersects_geojson(geom, c.geojson):
+                    results.append(CommuneSerializer(c).data)
+                    break
+        return Response(results, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def add_geometry(self, request, pk=None):
+        """
+        POST /api/gis/zones/{id}/add_geometry/
+
+        Add a new geometry to an existing zone.
+        Body: {"geometry_type": "Polygon", "geometry": {...}}
+        """
+        zone = self.get_object()
+        geo_type = request.data.get('geometry_type', 'Polygon')
+        geometry = request.data.get('geometry')
+        if not geometry:
+            return Response({'error': 'geometry is required'}, status=status.HTTP_400_BAD_REQUEST)
+        from .models import ZoneGeometry
+        zg = ZoneGeometry.objects.create(zone=zone, geometry_type=geo_type, geometry=geometry)
+        from .serializers import ZoneGeometrySerializer
+        return Response(ZoneGeometrySerializer(zg).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['delete'])
+    def remove_geometry(self, request):
+        """
+        DELETE /api/gis/zones/remove_geometry/?geometry_id=<uuid>
+
+        Remove a single geometry from a zone.
+        """
+        geometry_id = request.query_params.get('geometry_id')
+        if not geometry_id:
+            return Response({'error': 'geometry_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        from .models import ZoneGeometry
+        try:
+            zg = ZoneGeometry.objects.get(id=geometry_id)
+            zg.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except ZoneGeometry.DoesNotExist:
+            return Response({'error': 'Geometry not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class CommuneViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only list/retrieve for communes.
+    GET /api/gis/communes/         - List all communes
+    GET /api/gis/communes/{id}/    - Commune detail with geometry
+    """
+    queryset = Commune.objects.all()
+    serializer_class = CommuneSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
 
 
 class GisAnalyzeView(views.APIView):
@@ -201,9 +285,15 @@ class GisAnalyzeView(views.APIView):
 
         if zones:
             for zone in zones:
+                all_geoms = list(zone.geometries.all())
+                if not all_geoms and zone.geojson:
+                    all_geoms = [type('obj', (object,), {'geometry': zone.geojson})()]
                 zone_cases = [
                     c for c in cases_data
-                    if point_in_zone(c['patient__latitude'], c['patient__longitude'], zone.geojson)
+                    if any(
+                        point_in_zone(c['patient__latitude'], c['patient__longitude'], g.geometry if hasattr(g, 'geometry') else g.geojson)
+                        for g in all_geoms
+                    )
                 ]
                 metrics = compute_metrics(zone_cases)
                 
