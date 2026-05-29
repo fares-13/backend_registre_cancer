@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -109,11 +110,20 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ImproperlyConfigured("DATABASE_URL is missing. Set DATABASE_URL in your environment or .env file.")
+if "ALLOWED_HOSTS=" in DATABASE_URL:
+    raise ImproperlyConfigured(
+        "DATABASE_URL appears invalid because it contains ALLOWED_HOSTS text. "
+        "Please ensure DATABASE_URL and ALLOWED_HOSTS are defined separately."
+    )
+
 DATABASES = {
     "default": dj_database_url.config(
-        default=os.environ.get("DATABASE_URL"),
+        default=DATABASE_URL,
         conn_max_age=600,
-        ssl_require=not os.environ.get("DEBUG") == "True"
+        ssl_require=not DEBUG
     )
 }
 
