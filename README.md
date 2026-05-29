@@ -153,17 +153,4 @@ The backend contains helpful guides in `docs/`:
 - `docs/testing_guide.md`
 - `docs/frontend_auth_architecture.md`
 
-## 📦 Frontend repository
 
-The frontend is managed separately in its own repository and should have its own `README.md` describing the React/Vite client and JWT integration.
-
-Suggested frontend responsibilities:
-- Login and session management
-- Patient search and form UI
-- Dashboard charts and reports
-- RCP workflow experience
-- GIS map visualization
-
-## 📝 Notes for GitHub
-
-This repository is intended to be published as the backend service for the Registre Cancer public GitHub project. Keep sensitive values out of source control by using `.env` and platform environment variables.
